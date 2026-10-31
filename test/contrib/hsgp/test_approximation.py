@@ -515,8 +515,8 @@ def test_matern_gp_model(
         (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 2.0, 1.0, 10.0, [20, 20]),
         (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 5.0, 1.0, 10.0, [20, 20]),
         (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 10.0, 1.0, 10.0, [20, 20]),
-        (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 2.0, 0.5, 10.0, [100, 100]),
-        (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 5.0, 2.0, 10.0, [40, 40]),
+        (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 2.0, 0.5, 10.0, [48, 48]),
+        (np.array([[0.5, 0.3]]), np.array([[0.0, 0.0]]), 5.0, 2.0, 10.0, [20, 20]),
         # 3D tests (scale_mixture > 1.5 required for dim=3)
         # 3D requires more basis functions than lower dimensions for accurate approximation
         (
