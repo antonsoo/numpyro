@@ -26,14 +26,12 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 
-from functools import partial
 from typing import Optional, Union
 
 import numpy as np
 
 import jax
 from jax import Array, lax
-from jax.custom_derivatives import SymbolicZero
 from jax.nn import softmax, softplus
 import jax.numpy as jnp
 import jax.random as random
@@ -1777,20 +1775,22 @@ def _zero_inflated_zero_log_prob(gate: Array, log_prob: Array) -> Array:
 
 # Differentiate the mixture rather than the endpoint logarithms. This keeps
 # d/dgate = (1 - exp(log_prob)) / exp(result) at gate=0 and gate=1.
-@partial(_zero_inflated_zero_log_prob.defjvp, symbolic_zeros=True)
+@_zero_inflated_zero_log_prob.defjvp
 def _zero_inflated_zero_log_prob_jvp(
     primals: tuple[Array, Array],
-    tangents: tuple[Union[Array, SymbolicZero], Union[Array, SymbolicZero]],
+    tangents: tuple[Array, Array],
 ) -> tuple[Array, Array]:
     gate, log_prob = primals
     gate_tangent, log_prob_tangent = tangents
     result = _zero_inflated_zero_log_prob(gate, log_prob)
-    tangent = jnp.zeros_like(result)
-    # A constant gate must not contribute 0 * inf when its derivative overflows.
-    if not isinstance(gate_tangent, SymbolicZero):
-        tangent -= gate_tangent * jnp.expm1(log_prob) * jnp.exp(-result)
-    if not isinstance(log_prob_tangent, SymbolicZero):
-        tangent += log_prob_tangent * (1 - gate) * jnp.exp(log_prob - result)
+    # Cap the inverse mass so materialized zero tangents cannot produce 0 * inf.
+    # Mask before exp as well, to avoid NaNs when differentiating this rule.
+    maximum = jnp.finfo(result.dtype).max
+    overflow = -result >= jnp.log(maximum)
+    safe_result = jnp.where(overflow, 0.0, result)
+    inv_total = jnp.where(overflow, maximum, jnp.exp(-safe_result))
+    tangent = -gate_tangent * jnp.expm1(log_prob) * inv_total
+    tangent += log_prob_tangent * (1 - gate) * jnp.exp(log_prob - result)
     return result, tangent
 
 

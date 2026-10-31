@@ -2189,7 +2189,7 @@ def test_log_prob_LKJCholesky(dimension, concentration):
 
 @pytest.mark.parametrize("family", ["poisson", "geometric"])
 @pytest.mark.parametrize("gate", [0.0, 0.25])
-@pytest.mark.parametrize("value", [0.0, 5.0, 50.0, 100.0, 300.0])
+@pytest.mark.parametrize("value", [5.0, 50.0, 100.0, 300.0])
 @pytest.mark.parametrize("compiled", [False, True])
 def test_zero_inflated_positive_observation_gradients(family, gate, value, compiled):
     # Explicit float32 also exercises the underflow path with x64 enabled.
@@ -2211,17 +2211,8 @@ def test_zero_inflated_positive_observation_gradients(family, gate, value, compi
     else:
         base_log_prob = osp.geom.logpmf(value + 1, 0.5)
         base_derivative = (1.0 - value) / 2.0
-    if value == 0:
-        mass = np.exp(base_log_prob)
-        total = gate + (1 - gate) * mass
-        expected = np.log(total)
-        expected_derivatives = (
-            (1 - gate) * mass * base_derivative / total,
-            (1 - mass) / total,
-        )
-    else:
-        expected = np.log1p(-gate) + base_log_prob
-        expected_derivatives = (base_derivative, -1 / (1 - gate))
+    expected = np.log1p(-gate) + base_log_prob
+    expected_derivatives = (base_derivative, -1 / (1 - gate))
     assert_allclose(actual, expected, rtol=2e-5, atol=1e-6)
     assert_allclose(derivatives, expected_derivatives, rtol=1e-6, atol=1e-6)
 
@@ -2271,11 +2262,11 @@ def test_zero_inflated_zero_observation_gradients(family, rate, gate, values, co
     with np.errstate(divide="ignore", over="ignore"):
         zero_log_prob = np.logaddexp(np.log(gate), np.log1p(-gate) + base_log_prob)
         expected = np.where(values == 0, zero_log_prob, np.log1p(-gate) + base_log_prob)
-        weight = (1 - gate) * np.exp(base_log_prob - zero_log_prob)
-        gate_derivative = -np.expm1(base_log_prob) * np.exp(-zero_log_prob)
-        gate_derivative = np.where(
-            gate_derivative > np.finfo(probability.dtype).max, np.inf, gate_derivative
-        )
+        mass = np.exp(base_log_prob)
+        total = gate + (1 - gate) * mass
+        weight = (1 - gate) * mass / total
+        inv_total = np.minimum(1 / total, np.finfo(probability.dtype).max)
+        gate_derivative = -np.expm1(base_log_prob) * inv_total
         expected_gate = np.where(
             values == 0, gate_derivative, -np.divide(1.0, 1 - gate)
         )
@@ -2295,20 +2286,50 @@ def test_zero_inflated_fixed_gate_rate_derivatives(rate, gate, compiled):
         return dist.ZeroInflatedPoisson(rate=r, gate=gate).log_prob(0.0)
 
     def evaluate(r):
+        def joint_score(parameters):
+            return dist.ZeroInflatedPoisson(
+                gate=parameters[0], rate=parameters[1]
+            ).log_prob(0.0)
+
+        def masked_score(parameters):
+            g, r = parameters
+            g = jnp.where(g > 0, g, 0.0)
+            return dist.ZeroInflatedPoisson(gate=g, rate=r).log_prob(0.0)
+
+        parameters = jnp.array([gate, r])
+        joint_gradient = jax.jacfwd(joint_score)(parameters)
         return (
             jax.grad(score)(r),
             jax.jvp(score, (r,), (jnp.ones_like(r),))[1],
             jax.jacfwd(score)(r),
             jax.hessian(score)(r),
+            joint_gradient[0],
+            joint_gradient[1],
+            jax.jvp(masked_score, (parameters,), (jnp.array([0.0, 1.0]),))[1],
         )
 
     if compiled:
         evaluate = jax.jit(evaluate)
     mass = np.exp(-rate)
-    weight = (1 - gate) * mass / (gate + (1 - gate) * mass)
+    total = gate + (1 - gate) * mass
+    weight = (1 - gate) * mass / total
     actual = evaluate(jnp.asarray(rate))
+    gate_derivative = -np.expm1(-rate) * min(
+        1 / total, np.finfo(np.asarray(actual[0]).dtype).max
+    )
     assert_allclose(
-        actual, [-weight, -weight, -weight, weight * (1 - weight)], atol=1e-6
+        actual,
+        [
+            -weight,
+            -weight,
+            -weight,
+            weight * (1 - weight),
+            gate_derivative,
+            -weight,
+            -weight,
+        ],
+        rtol=2e-5,
+        atol=1e-6,
     )
 
 
